@@ -17,27 +17,50 @@ CurrentRSSI=-90
 
 import sondehub
 import serial
-import re
 import sys
+import time
+import crcmod
 
-port = serial.Serial('/dev/rfcomm0', 57600, timeout=5)
 from sondehub.amateur import Uploader
 uploader = Uploader("KD9PRC-go")
 
+crc16f = crcmod.predefined.mkCrcFun('crc-ccitt-false')
+
 rssi = None
 snr = None
+port = None
 
 while True:
-    line = port.readline().decode('latin1').strip()
+    try:
+        if port is None:
+            port = serial.Serial('/dev/rfcomm0', 57600, timeout=5)
+        line = port.readline()
+    except serial.serialutil.SerialException as e:
+        print("SerialException: {}, retrying...".format(e))
+        time.sleep(0.1)
+        port.close()
+        time.sleep(1)
+        port.open()
+        time.sleep(0.1)
+        continue
+    line = line.decode('latin1').strip()
     if line.startswith('CurrentRSSI') or line.startswith('GPS'):
         continue
-    print(line)
+    print(line, end=' ')
     if line.startswith('PacketRSSI='):
         rssi = line.split('=')[1]
     if line.startswith('Message='):
+        ukhas_line_parts = line.lstrip("Message=$$").split("*")
+        expected_crc = "{0:04X}".format(crc16f(ukhas_line_parts[0].encode('ascii')))
+        if expected_crc != ukhas_line_parts[1]:
+            print("CRC error: {} mismatches expected {}".format(expected_crc, ukhas_line_parts[1]))
+            print()
+            continue
+        else:
+            print("(CRC OK)")
         vars = line.split('$$')[1].split('*')[0].split(',')
         print(vars)
-        uploader.add_telemetry(
+        out = uploader.add_telemetry(
             vars[0], # Your payload callsign
             vars[2], # Time
             vars[3], # Latitude
@@ -50,5 +73,7 @@ while True:
             sats=vars[8],
             temp=vars[9]
         )
-        print()
+        print(out)
+    print()
+    time.sleep(0.05)
 #sys.exit(0)
